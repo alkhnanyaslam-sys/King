@@ -2,18 +2,18 @@ import asyncio
 import sqlite3
 import random
 import os
+import sys
 from pyrogram import Client
 from pyrogram.errors import FloodWait, UserPrivacyRestricted, UserAlreadyParticipant
 
-# --- البيانات الخاصة بك ---
+# --- بيانات الحساب الخاصة بك ---
 API_ID = 36472385
 API_HASH = "ce35a173b6e58ee45ac703dfbcd76138"
-BOT_TOKEN = "8838892412:AAEqHINTvqtJKx6FfFGXLQPy19MIZAHHZVE"
 
 SOURCE_CHAT = "C725C2"    # الجروب المنقول منه
 TARGET_CHAT = "C263C"     # الجروب المنقول إليه
 
-# --- إعداد قاعدة بيانات الحفظ الذكي ---
+# إعداد قاعدة البيانات لمنع التكرار
 conn = sqlite3.connect("members_database.db")
 cursor = conn.cursor()
 cursor.execute("""
@@ -23,8 +23,8 @@ cursor.execute("""
 """)
 conn.commit()
 
-# تشغيل العميل كـ Userbot مستقر وثابت
-app = Client("adder_userbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# تشغيل كـ Userbot حقيقي (بدون bot_token لضمان قراءة التفاعلات وصلاحيات الإضافة الكاملة)
+app = Client("adder_userbot", api_id=API_ID, api_hash=API_HASH)
 
 def is_already_added(user_id):
     cursor.execute("SELECT 1 FROM added_members WHERE user_id = ?", (user_id,))
@@ -36,16 +36,16 @@ def save_user(user_id):
 
 async def main():
     async with app:
-        print("[+] تم الاتصال بنجاح. جاري فحص تفاعلات الأعضاء...")
+        print("[+] تم الاتصال بحسابك الشخصي بنجاح. جاري فحص التفاعلات...")
         
         try:
             source_peer = await app.get_chat(SOURCE_CHAT)
             target_peer = await app.get_chat(TARGET_CHAT)
         except Exception as e:
-            print(f"[❌] خطأ في الوصول للجروبات. تأكد أن البوت/الحساب عضو فيها ومشرف: {e}")
+            print(f"[❌] خطأ في الوصول للجروبات. تأكد أن حسابك عضو في الجروبين: {e}")
             return
         
-        # جلب آخر 100 منشور لفحص التفاعلات
+        # فحص التفاعلات لآخر 100 منشور
         async for message in app.get_chat_history(source_peer.id, limit=100):
             if message.reactions:
                 try:
@@ -67,7 +67,7 @@ async def main():
                             print(f"[✅] تم إضافة {user_name} بنجاح.")
                             save_user(user_id)
                             
-                            # فاصل زمني عشوائي آمن لمنع الحظر وضمان إضافة أكبر عدد
+                            # فاصل زمني آمن وعشوائي لتجنب الحظر الذاتي
                             sleep_time = random.randint(35, 65)
                             print(f"[💤] انتظار آمن لمدة {sleep_time} ثانية...")
                             await asyncio.sleep(sleep_time)
@@ -85,9 +85,14 @@ async def main():
                             print(f"[💥] تعذر إضافة {user_name}: {e}")
                             
                 except Exception as e:
-                    # تخطي المنشور إذا حدث خطأ في جلب تفاعلاته
                     continue
 
 if __name__ == "__main__":
+    # التحقق من وجود ملف الجلسة لتفادي إيقاف جيت هوب للسكربت
+    if not os.path.exists("adder_userbot.session"):
+        print("[❌] ملف الجلسة 'adder_userbot.session' غير موجود!")
+        print("[💡] يجب تشغيل السكربت لمرة واحدة أولاً على جهازك أو الكمبيوتر لتسجيل الدخول برقم هاتفك وتوليد هذا الملف، ثم رفعه إلى جيت هوب.")
+        sys.exit(1)
+        
     app.run(main())
 
