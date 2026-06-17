@@ -2,18 +2,31 @@ import asyncio
 import sqlite3
 import random
 import os
-import sys
-from pyrogram import Client
-from pyrogram.errors import FloodWait, UserPrivacyRestricted, UserAlreadyParticipant
+import binascii
+from pyrogram import Client, errors
+from pyrogram.raw import functions
 
-# --- بيانات الحساب الخاصة بك ---
+# --- البيانات ---
 API_ID = 36472385
 API_HASH = "ce35a173b6e58ee45ac703dfbcd76138"
 
-SOURCE_CHAT = "C725C2"    # الجروب المنقول منه
-TARGET_CHAT = "C263C"     # الجروب المنقول إليه
+SOURCE_CHAT = "@C725C2"
+TARGET_CHAT = "@C263C"
 
-# إعداد قاعدة البيانات لمنع التكرار
+# تحميل الـ session من الـ Secret
+SESSION_HEX = os.environ.get("SESSION_HEX", "")
+
+# تحويل الـ hex لملف session
+if SESSION_HEX:
+    session_data = binascii.unhexlify(SESSION_HEX)
+    with open("adder_userbot.session", "wb") as f:
+        f.write(session_data)
+    print("[✅] تم تحميل الـ session بنجاح!")
+else:
+    print("[❌] SESSION_HEX غير موجود في الـ Secrets!")
+    exit(1)
+
+# قاعدة البيانات
 conn = sqlite3.connect("members_database.db")
 cursor = conn.cursor()
 cursor.execute("""
@@ -23,7 +36,6 @@ cursor.execute("""
 """)
 conn.commit()
 
-# تشغيل كـ Userbot حقيقي (بدون bot_token لضمان قراءة التفاعلات وصلاحيات الإضافة الكاملة)
 app = Client("adder_userbot", api_id=API_ID, api_hash=API_HASH)
 
 def is_already_added(user_id):
@@ -34,65 +46,83 @@ def save_user(user_id):
     cursor.execute("INSERT OR IGNORE INTO added_members (user_id) VALUES (?)", (user_id,))
     conn.commit()
 
+async def get_reactor_ids(chat_id, message_id):
+    user_ids = []
+    try:
+        peer = await app.resolve_peer(chat_id)
+        result = await app.invoke(
+            functions.messages.GetMessageReactionsList(
+                peer=peer,
+                id=message_id,
+                limit=100
+            )
+        )
+        for user in result.users:
+            user_ids.append(user.id)
+    except Exception as e:
+        print(f"[⚠️] فشل جلب تفاعلات الرسالة {message_id}: {e}")
+    return user_ids
+
 async def main():
     async with app:
-        print("[+] تم الاتصال بحسابك الشخصي بنجاح. جاري فحص التفاعلات...")
-        
+        print("[+] تم الاتصال بنجاح!")
+
         try:
-            source_peer = await app.get_chat(SOURCE_CHAT)
-            target_peer = await app.get_chat(TARGET_CHAT)
+            source_chat = await app.get_chat(SOURCE_CHAT)
+            target_chat = await app.get_chat(TARGET_CHAT)
+            print(f"[✅] جروب المصدر: {source_chat.title}")
+            print(f"[✅] جروب الهدف: {target_chat.title}")
         except Exception as e:
-            print(f"[❌] خطأ في الوصول للجروبات. تأكد أن حسابك عضو في الجروبين: {e}")
+            print(f"[❌] خطأ في الجروبات: {e}")
             return
-        
-        # فحص التفاعلات لآخر 100 منشور
-        async for message in app.get_chat_history(source_peer.id, limit=100):
-            if message.reactions:
-                try:
-                    async for peers in app.get_media_reaction_users(source_peer.id, message.id):
-                        if not peers.user:
-                            continue
-                        
-                        user_id = peers.user.id
-                        user_name = peers.user.username or peers.user.first_name
-                        
-                        if is_already_added(user_id):
-                            continue
-                            
-                        print(f"[*] تم العثور على عضو متفاعل جديد: {user_name} ({user_id})")
-                        
-                        try:
-                            # إضافة العضو للجروب المستهدف
-                            await app.add_chat_members(target_peer.id, user_id)
-                            print(f"[✅] تم إضافة {user_name} بنجاح.")
-                            save_user(user_id)
-                            
-                            # فاصل زمني آمن وعشوائي لتجنب الحظر الذاتي
-                            sleep_time = random.randint(35, 65)
-                            print(f"[💤] انتظار آمن لمدة {sleep_time} ثانية...")
-                            await asyncio.sleep(sleep_time)
-                            
-                        except FloodWait as e:
-                            print(f"[⚠️] تلجرام يطلب التوقف المؤقت. انتظار {e.value} ثانية...")
-                            await asyncio.sleep(e.value)
-                        except UserPrivacyRestricted:
-                            print(f"[❌] تعذر إضافة {user_name} بسبب خصوصية حسابه.")
-                            save_user(user_id)
-                        except UserAlreadyParticipant:
-                            print(f"[ℹ️] العضو {user_name} موجود بالفعل هناك.")
-                            save_user(user_id)
-                        except Exception as e:
-                            print(f"[💥] تعذر إضافة {user_name}: {e}")
-                            
-                except Exception as e:
+
+        total_added = 0
+        total_skipped = 0
+
+        async for message in app.get_chat_history(source_chat.id, limit=100):
+            if not message.reactions:
+                continue
+
+            reactor_ids = await get_reactor_ids(source_chat.id, message.id)
+
+            for u_id in reactor_ids:
+                if is_already_added(u_id):
+                    total_skipped += 1
                     continue
 
-if __name__ == "__main__":
-    # التحقق من وجود ملف الجلسة لتفادي إيقاف جيت هوب للسكربت
-    if not os.path.exists("adder_userbot.session"):
-        print("[❌] ملف الجلسة 'adder_userbot.session' غير موجود!")
-        print("[💡] يجب تشغيل السكربت لمرة واحدة أولاً على جهازك أو الكمبيوتر لتسجيل الدخول برقم هاتفك وتوليد هذا الملف، ثم رفعه إلى جيت هوب.")
-        sys.exit(1)
-        
-    app.run(main())
+                try:
+                    await app.add_chat_members(target_chat.id, u_id)
+                    total_added += 1
+                    save_user(u_id)
+                    print(f"[✅] تم إضافة {u_id} | المجموع: {total_added}")
 
+                    sleep_time = random.randint(45, 90)
+                    print(f"[💤] انتظار {sleep_time} ثانية...")
+                    await asyncio.sleep(sleep_time)
+
+                except errors.FloodWait as e:
+                    print(f"[⚠️] انتظار {e.value} ثانية...")
+                    await asyncio.sleep(e.value)
+
+                except errors.UserPrivacyRestricted:
+                    print(f"[🔒] {u_id} خصوصيته مغلقة")
+                    save_user(u_id)
+
+                except errors.UserAlreadyParticipant:
+                    print(f"[ℹ️] {u_id} موجود بالفعل")
+                    save_user(u_id)
+
+                except errors.PeerFlood:
+                    print("[🚨] خطر حظر! توقف الآن!")
+                    return
+
+                except Exception as e:
+                    if "Peer id invalid" in str(e):
+                        save_user(u_id)
+                    else:
+                        print(f"[💥] خطأ: {e}")
+
+        print(f"\n[🏁] انتهى! تم إضافة: {total_added} | تم تخطي: {total_skipped}")
+
+if __name__ == "__main__":
+    app.run(main())
