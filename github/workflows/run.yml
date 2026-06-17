@@ -1,0 +1,37 @@
+name: Telegram Member Adder
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # سيعمل السكربت تلقائياً كل 6 ساعات لفحص الأعضاء الجدد وإضافتهم
+  workflow_dispatch: # يتيح لك زر "Run workflow" لتشغيله يدوياً في أي وقت تريد
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Adder Script
+      run: python main.py
+
+    - name: Save Session and Database Changes
+      if: always()
+      run: |
+        git config --global user.name "GitHub Action"
+        git config --global user.email "action@github.com"
+        git add adder_userbot.session members_database.db || true
+        git commit -m "Update database and session storage [skip ci]" || true
+        git push || true
+
